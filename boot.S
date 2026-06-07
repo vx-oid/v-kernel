@@ -54,7 +54,10 @@ trap_vector:
 
 _start:
     # Set the Stack Pointer (sp) to the top of the C3's internal SRAM
-    li sp, 0x3FCDFFFF
+    # Use a 16-byte aligned stack top to satisfy RISC-V ABI and avoid
+    # misaligned store exceptions when saving caller-saved registers.
+    # Align 0x3FCDFFFF down to the nearest 16-byte boundary: 0x3FCDFFF0
+    li sp, 0x3FCDFFF0
 
     # Jump to our C code
     call main

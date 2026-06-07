@@ -46,6 +46,8 @@ void v_print_hex(unsigned int val) {
 }
 
 // --- The C Trap Handler ---
+static void decode_mcause(unsigned int mcause);
+
 void c_trap_handler(unsigned int *saved) {
     v_print("\n================================\n");
     v_print("  >>> CPU TRAP INTERCEPTED <<<  \n");
@@ -62,6 +64,8 @@ void c_trap_handler(unsigned int *saved) {
     v_print_hex(mepc);
     v_print("\nmcause: ");
     v_print_hex(mcause);
+    /* Print human-readable mcause description */
+    decode_mcause(mcause);
     v_print("\nmtval: ");
     v_print_hex(mtval);
     v_print("\nmstatus: ");
@@ -105,6 +109,39 @@ void c_trap_handler(unsigned int *saved) {
     while (1);
 }
 
+static void decode_mcause(unsigned int mcause) {
+    unsigned int is_interrupt = (mcause >> 31) & 1u;
+    unsigned int code = mcause & 0x7fffffffu;
+    if (is_interrupt) {
+        v_print("\nInterrupt: ");
+        switch (code) {
+            case 3: v_print("Machine software interrupt\n"); break;
+            case 7: v_print("Machine timer interrupt\n"); break;
+            case 11: v_print("Machine external interrupt\n"); break;
+            default: v_print("Unknown interrupt\n"); break;
+        }
+    } else {
+        v_print("\nException: ");
+        switch (code) {
+            case 0: v_print("Instruction address misaligned\n"); break;
+            case 1: v_print("Instruction access fault\n"); break;
+            case 2: v_print("Illegal instruction\n"); break;
+            case 3: v_print("Breakpoint\n"); break;
+            case 4: v_print("Load address misaligned\n"); break;
+            case 5: v_print("Load access fault\n"); break;
+            case 6: v_print("Store/AMO address misaligned\n"); break;
+            case 7: v_print("Store/AMO access fault\n"); break;
+            case 8: v_print("Environment call from U-mode\n"); break;
+            case 9: v_print("Environment call from S-mode\n"); break;
+            case 11: v_print("Environment call from M-mode\n"); break;
+            case 12: v_print("Instruction page fault\n"); break;
+            case 13: v_print("Load page fault\n"); break;
+            case 15: v_print("Store/AMO page fault\n"); break;
+            default: v_print("Unknown exception\n"); break;
+        }
+    }
+}
+
 int my_global_variable = 42;
 
 // --- OS Entry Point ---
@@ -131,8 +168,10 @@ void main() {
     v_print("\n\n");
 
     // Configure the Trap Vector
-    asm volatile ("csrw mtvec, %0" : : "r" (trap_vector));
-    v_print("mtvec CSR configured.\n");
+    /* Force direct mode for mtvec by clearing the low two bits. */
+    unsigned int mtvec_val = ((unsigned int)trap_vector) & ~0x3u;
+    asm volatile ("csrw mtvec, %0" :: "r" (mtvec_val));
+    v_print("mtvec CSR configured (direct mode).\n");
 
     // Trigger a manual Exception
     v_print("Pressing the RISC-V panic button (ecall)...\n");
