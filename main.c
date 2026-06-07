@@ -49,21 +49,32 @@ void v_print_hex(unsigned int val) {
 void c_trap_handler() {
     v_print("\n================================\n");
     v_print("  >>> CPU TRAP INTERCEPTED <<<  \n");
-    
-    // Read the Machine Exception Program Counter (where the trap happened)
-    unsigned int mepc;
+
+    /* Read CSRs: mepc, mcause, mtval */
+    unsigned int mepc, mcause, mtval;
     asm volatile ("csrr %0, mepc" : "=r" (mepc));
-    
+    asm volatile ("csrr %0, mcause" : "=r" (mcause));
+    asm volatile ("csrr %0, mtval" : "=r" (mtval));
+
     v_print("Trapped at Address: ");
     v_print_hex(mepc);
+    v_print("\nmcause: ");
+    v_print_hex(mcause);
+    v_print("\nmtval: ");
+    v_print_hex(mtval);
     v_print("\n================================\n");
 
-    // Move the return address forward by 4 bytes to skip the 'ecall' instruction
-    // Otherwise, we will return directly to ecall and infinite loop
-    mepc += 4;
-    
-    // Write the modified address back to the CPU
-    asm volatile ("csrw mepc, %0" : : "r" (mepc));
+    /* Only advance mepc for ECALLs (U-mode=8, S-mode=9, M-mode=11). */
+    unsigned int cause = mcause & 0xFFF;
+    if (cause == 8 || cause == 9 || cause == 11) {
+        mepc += 4;
+        asm volatile ("csrw mepc, %0" : : "r" (mepc));
+        return; /* return to assembly which will restore regs and mret */
+    }
+
+    /* For unexpected traps, print and halt to avoid returning into a fault. */
+    v_print("Unhandled trap, halting.\n");
+    while (1);
 }
 
 int my_global_variable = 42;

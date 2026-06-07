@@ -3,8 +3,8 @@
 
 .align 4
 trap_vector:
-    # 1. Allocate 64 bytes on the stack to save the 16 "Caller-Saved" registers
-    addi sp, sp, -64
+    # 1. Allocate 256 bytes on the stack to save registers and provide C-call safety
+    addi sp, sp, -256
 
     # 2. Save the registers to RAM
     sw ra, 0(sp)
@@ -46,7 +46,7 @@ trap_vector:
     lw t6, 60(sp)
 
     # 5. Deallocate the stack space
-    addi sp, sp, 64
+    addi sp, sp, 256
 
     # 6. Machine Return (jump back to where we were before the interrupt)
     mret
