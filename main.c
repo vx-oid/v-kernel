@@ -13,6 +13,19 @@ extern volatile unsigned int systicks;
 void clear_timer_interrupt(void);
 void timer_init(unsigned int dummy_frequency_divider);
 
+#include "include/syscall.h"
+
+// Syscall dispatcher implemented in src/syscall.c
+unsigned int syscall_dispatch(unsigned int num, unsigned int *args);
+
+/* Simple inline syscall wrapper for one-arg syscalls used in demos. */
+static inline unsigned int call_sys(unsigned int num, unsigned int a0) {
+    register unsigned int _a0 asm("a0") = a0;
+    register unsigned int _a7 asm("a7") = num;
+    asm volatile ("ecall" : "+r"(_a0) : "r"(_a7) : "memory");
+    return _a0;
+}
+
 // --- Hardware Abstraction Layer (HAL) ---
 void v_print(const char *str) {
     while (*str) {
@@ -124,6 +137,23 @@ void c_trap_handler(unsigned int *saved) {
     }
 
     if (!is_interrupt && (cause == 8 || cause == 9 || cause == 11)) {
+        if (cause == 11) {
+            /* Environment call (ECALL) from M-mode: dispatch syscall.
+               The saved frame contains registers: saved[4]..saved[10] == a0..a6
+               and saved[11] == a7 (syscall number). */
+            if (saved) {
+                unsigned int syscall_num = saved[11];
+                unsigned int args[7];
+                for (int i = 0; i < 7; i++) args[i] = saved[4 + i];
+                unsigned int ret = syscall_dispatch(syscall_num, args);
+                /* Return value in a0 (saved[4]) */
+                saved[4] = ret;
+            }
+            mepc += 4;
+            asm volatile ("csrw mepc, %0" : : "r" (mepc));
+            return; /* return to assembly which will restore regs and mret */
+        }
+
         mepc += 4;
         asm volatile ("csrw mepc, %0" : : "r" (mepc));
         return; /* return to assembly which will restore regs and mret */
@@ -366,6 +396,19 @@ void main() {
 
     // If mret in boot.S works, the CPU will resume execution right here!
     v_print("\n>>> SURVIVED THE TRAP! Back in main loop. <<<\n\n");
+
+    /* Demo: syscall usage */
+    const char demo_msg[] = "Hello from syscall SYS_PRINT!\n";
+    call_sys(SYS_PRINT, (unsigned int)demo_msg);
+
+    unsigned int t = call_sys(SYS_TIME, 0);
+    v_print("Time low32: ");
+    v_print_hex(t);
+    v_print("\n");
+
+    v_print("Sleeping 100 ms via SYS_SLEEP_MS...\n");
+    call_sys(SYS_SLEEP_MS, 100);
+    v_print("Woke up\n");
 
     unsigned long long last_counter = read_timg0_counter();
     unsigned int visible_ticks = 0;

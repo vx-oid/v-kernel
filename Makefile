@@ -1,12 +1,15 @@
 CC = riscv64-unknown-elf-gcc
-CFLAGS = -march=rv32imc_zicsr -mabi=ilp32 -T linker.ld -ffreestanding -fno-builtin -nostartfiles -Wall -Wextra -O2 -g
+INCDIR = include
+CFLAGS = -march=rv32imc_zicsr -mabi=ilp32 -T linker.ld -I$(INCDIR) -ffreestanding -fno-builtin -nostartfiles -Wall -Wextra -O2 -g
 
 PORT ?= /dev/ttyUSB0
 
 all: v-kernel.bin
 
-v-kernel.elf: boot.S main.c
-	$(CC) $(CFLAGS) boot.S main.c -o v-kernel.elf
+SRCS = $(wildcard src/*.c) main.c
+
+v-kernel.elf: boot.S $(SRCS)
+	$(CC) $(CFLAGS) boot.S $(SRCS) -o v-kernel.elf
 
 v-kernel.bin: v-kernel.elf
 	esptool.py --chip esp32c3 elf2image --flash_mode dio v-kernel.elf
