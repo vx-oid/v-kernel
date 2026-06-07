@@ -1,11 +1,15 @@
 .global _start
 .global trap_vector
 
-.align 4
+/* Put the vectored trap jump table in its own section so the linker can
+    place it at the start of the .text region. */
+.section .text.trap_vector_table
+.align 8
 /* Vectored table: each entry jumps to the common `trap_vector` handler.
-   Hardware in vectored mode will jump to mtvec_base + 4*cause; these
-   stubs forward every possible cause to the unified handler. */
+    Hardware in vectored mode will jump to mtvec_base + 4*cause; these
+    stubs forward every possible cause to the unified handler. */
 trap_vector_table:
+    j trap_vector
     j trap_vector
     j trap_vector
     j trap_vector

@@ -112,6 +112,17 @@ void c_trap_handler(unsigned int *saved) {
         return; /* return to restore regs and mret */
     }
 
+    /* Some SoC timer peripherals raise external interrupts (cause 11).
+       Treat external interrupts as potential TIMG events and handle them
+       here by clearing the TIMG source and updating `systicks`. */
+    if (is_interrupt && cause == 11) {
+        /* Clear TIMG interrupt if pending and increment systicks. */
+        /* Note: clear_timer_interrupt() is idempotent for non-TIMG interrupts. */
+        systicks++;
+        clear_timer_interrupt();
+        return;
+    }
+
     if (!is_interrupt && (cause == 8 || cause == 9 || cause == 11)) {
         mepc += 4;
         asm volatile ("csrw mepc, %0" : : "r" (mepc));
@@ -159,6 +170,8 @@ static void decode_mcause(unsigned int mcause) {
 int my_global_variable = 42;
 
 volatile unsigned int systicks = 0;
+volatile unsigned int timer_delta = 0;
+volatile unsigned long long next_tick_alarm = 0;
 
 static unsigned long long read_timg0_counter(void) {
     volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
@@ -174,12 +187,62 @@ static unsigned long long read_timg0_counter(void) {
     return (hi << 32) | lo;
 }
 
+static void read_and_print_timg_status(void) {
+    volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
+    volatile unsigned int *int_ena = base + (0x0070/4);
+    volatile unsigned int *int_raw = base + (0x0074/4);
+    volatile unsigned int *int_st  = base + (0x0078/4);
+
+    v_print(" TIMG: int_raw="); v_print_hex(*int_raw);
+    v_print(" int_st="); v_print_hex(*int_st);
+    v_print(" int_ena="); v_print_hex(*int_ena);
+}
+
+static void read_and_print_timg_regs(void) {
+    volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
+    volatile unsigned int *t0cfg = base + (0x0000/4);
+    volatile unsigned int *t0lo = base + (0x0010/4);
+    volatile unsigned int *t0hi = base + (0x0014/4);
+    volatile unsigned int *t0lo_read = base + (0x0004/4);
+    volatile unsigned int *t0hi_read = base + (0x0008/4);
+
+    v_print(" T0CFG="); v_print_hex(*t0cfg);
+    v_print(" T0ALARMLO="); v_print_hex(*t0lo);
+    v_print(" T0ALARMHI="); v_print_hex(*t0hi);
+    /* Latch and read current counter */
+    volatile unsigned int *t0update = base + (0x000C/4);
+    *t0update = 1u;
+    while ((*t0update & 1u) != 0);
+    v_print(" T0LO="); v_print_hex(*t0lo_read);
+    v_print(" T0HI="); v_print_hex(*t0hi_read);
+}
+
 /* Platform-specific: clear the timer interrupt source. Implement if needed. */
 void clear_timer_interrupt(void) {
-    /* Clear TIMG timer 0 interrupt (write-1-to-clear). */
-    volatile unsigned int *timg_int_clr = (volatile unsigned int *)(0x6001F000 + 0x007C);
-    /* Writing bit0 = 1 clears TIMG_T0_INT (WT). */
+    /* Clear TIMG timer 0 interrupt (write-1-to-clear), then re-arm next alarm.
+       This handles hardware that doesn't auto-reload the alarm. */
+    volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
+    volatile unsigned int *timg_int_clr = base + (0x007C/4);
+    volatile unsigned int *t0update = base + (0x000C/4);
+    volatile unsigned int *t0lo_read = base + (0x0004/4);
+    volatile unsigned int *t0hi_read = base + (0x0008/4);
+    volatile unsigned int *t0lo = base + (0x0010/4);
+    volatile unsigned int *t0hi = base + (0x0014/4);
+
+    /* Clear interrupt source first */
     *timg_int_clr = 1u;
+
+    /* Latch current counter value */
+    *t0update = 1u;
+    while ((*t0update & 1u) != 0);
+
+    unsigned int lo = *t0lo_read;
+    unsigned int hi = *t0hi_read;
+    unsigned long long cur = ((unsigned long long)hi << 32) | (unsigned long long)lo;
+    unsigned long long alarm = cur + (unsigned long long)timer_delta;
+
+    *t0lo = (unsigned int)(alarm & 0xFFFFFFFFu);
+    *t0hi = (unsigned int)(alarm >> 32);
 }
 
 /* Minimal timer init stub: user should program the timer/compare to generate
@@ -196,14 +259,13 @@ void timer_init(unsigned int dummy_frequency_divider) {
     volatile unsigned int *timg_int_ena = (volatile unsigned int *)(0x6001F000 + 0x0070);
     *timg_int_ena |= 1u;
 
-    /* Enable machine-timer interrupt in mie (bit 7 = MTIE) */
-    asm volatile ("csrrs zero, mie, %0" :: "r" (1u << 7));
-    /* Enable global interrupts (mstatus.MIE bit = 3) */
+    /* Enable global interrupts (mstatus.MIE bit = 3). Avoid writing `mie`. */
     asm volatile ("csrrs zero, mstatus, %0" :: "r" (1u << 3));
 }
 
 /* Full TIMG0 T0 setup: latch current counter, program alarm = now+delta, enable autoreload and start. */
 void timer_init_periodic(unsigned int delta_ticks) {
+    timer_delta = delta_ticks;
     volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
     volatile unsigned int *t0cfg = base + (0x0000/4);
     volatile unsigned int *t0lo = base + (0x0010/4);
@@ -237,6 +299,10 @@ void timer_init_periodic(unsigned int delta_ticks) {
 
     *t0lo = (unsigned int)(alarm & 0xFFFFFFFFu);
     *t0hi = (unsigned int)(alarm >> 32);
+
+     /* Record software next-tick alarm so polling fallback can work if IRQs
+         are not delivered. */
+     next_tick_alarm = alarm;
 
     /* Enable TIMG0 interrupt mask */
     *timg_int_ena |= 1u;
@@ -287,8 +353,12 @@ void main() {
         v_print("mtvec configured but in vectored mode (continuing).\n");
     }
 
-    // Start periodic TIMG0 timer (delta ticks). 1,000,000 ticks is arbitrary.
-    timer_init_periodic(1000000u);
+    // Start periodic TIMG0 timer (delta ticks). Use smaller test delta.
+    timer_init_periodic(100000u);
+
+     /* Enable global interrupts (mstatus.MIE) safely. Avoid writing `mie` which
+         may be unavailable on this core implementation (causes illegal instr). */
+     asm volatile ("csrrs x0, mstatus, %0" :: "r" (1u << 3));
 
     // Trigger a manual Exception
     v_print("Pressing the RISC-V panic button (ecall)...\n");
@@ -298,19 +368,34 @@ void main() {
     v_print("\n>>> SURVIVED THE TRAP! Back in main loop. <<<\n\n");
 
     unsigned long long last_counter = read_timg0_counter();
-    unsigned int last_systicks = systicks;
+    unsigned int visible_ticks = 0;
 
     while (1) {
         unsigned long long current_counter = read_timg0_counter();
 
-        if ((current_counter - last_counter) >= 1000000ull || systicks != last_systicks) {
-            last_counter = current_counter;
-            last_systicks = systicks;
+        /* Polling fallback: if interrupts are not delivered, advance systicks
+           in software when the TIMG counter reaches the next scheduled alarm. */
+        if (timer_delta != 0 && next_tick_alarm != 0 && current_counter >= next_tick_alarm) {
+            systicks++;
+            /* advance the software alarm */
+            next_tick_alarm += (unsigned long long)timer_delta;
+        }
 
+        while ((current_counter - last_counter) >= 1000000ull) {
+            last_counter += 1000000ull;
+            visible_ticks++;
+        }
+
+        if (visible_ticks != 0) {
             v_print("System stable... ticks=");
-            v_print_hex(systicks);
+            v_print_hex(visible_ticks);
             v_print(" counter=");
             v_print_hex((unsigned int)current_counter);
+            v_print(" irq_ticks=");
+            v_print_hex(systicks);
+            /* Print TIMG interrupt registers and alarm/counter for debugging */
+            read_and_print_timg_status();
+            read_and_print_timg_regs();
             v_print("\n");
         }
 

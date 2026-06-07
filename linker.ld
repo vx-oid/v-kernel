@@ -9,6 +9,7 @@ MEMORY {
 
 SECTIONS {
     .text : {
+        *(.text.trap_vector_table)
         *(.text*)
     } > iram
 
