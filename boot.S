@@ -2,6 +2,43 @@
 .global trap_vector
 
 .align 4
+/* Vectored table: each entry jumps to the common `trap_vector` handler.
+   Hardware in vectored mode will jump to mtvec_base + 4*cause; these
+   stubs forward every possible cause to the unified handler. */
+trap_vector_table:
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+    j trap_vector
+
 trap_vector:
     # 1. Allocate 256 bytes on the stack to save registers and provide C-call safety
     addi sp, sp, -256
@@ -59,8 +96,8 @@ _start:
     # Align 0x3FCDFFFF down to the nearest 16-byte boundary: 0x3FCDFFF0
     li sp, 0x3FCDFFF0
 
-    # Set mtvec early to trap_vector in direct mode (clear low two bits)
-    la t0, trap_vector
+    # Set mtvec early to trap_vector_table in direct mode (clear low two bits)
+    la t0, trap_vector_table
     li t1, -4
     and t0, t0, t1
     csrw mtvec, t0
