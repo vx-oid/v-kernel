@@ -46,15 +46,17 @@ void v_print_hex(unsigned int val) {
 }
 
 // --- The C Trap Handler ---
-void c_trap_handler() {
+void c_trap_handler(unsigned int *saved) {
     v_print("\n================================\n");
     v_print("  >>> CPU TRAP INTERCEPTED <<<  \n");
 
-    /* Read CSRs: mepc, mcause, mtval */
-    unsigned int mepc, mcause, mtval;
+    /* Read CSRs: mepc, mcause, mtval, mstatus, mtvec */
+    unsigned int mepc, mcause, mtval, mstatus, mtvec;
     asm volatile ("csrr %0, mepc" : "=r" (mepc));
     asm volatile ("csrr %0, mcause" : "=r" (mcause));
     asm volatile ("csrr %0, mtval" : "=r" (mtval));
+    asm volatile ("csrr %0, mstatus" : "=r" (mstatus));
+    asm volatile ("csrr %0, mtvec" : "=r" (mtvec));
 
     v_print("Trapped at Address: ");
     v_print_hex(mepc);
@@ -62,7 +64,33 @@ void c_trap_handler() {
     v_print_hex(mcause);
     v_print("\nmtval: ");
     v_print_hex(mtval);
+    v_print("\nmstatus: ");
+    v_print_hex(mstatus);
+    v_print("\nmtvec: ");
+    v_print_hex(mtvec);
     v_print("\n================================\n");
+
+    /* Dump the saved caller-saved registers from the frame passed in a0 */
+    if (saved != 0) {
+        v_print("Saved registers (from trap frame):\n");
+        v_print(" ra="); v_print_hex(saved[0]);
+        v_print(" t0="); v_print_hex(saved[1]);
+        v_print(" t1="); v_print_hex(saved[2]);
+        v_print(" t2="); v_print_hex(saved[3]);
+        v_print(" a0="); v_print_hex(saved[4]);
+        v_print(" a1="); v_print_hex(saved[5]);
+        v_print(" a2="); v_print_hex(saved[6]);
+        v_print(" a3="); v_print_hex(saved[7]);
+        v_print(" a4="); v_print_hex(saved[8]);
+        v_print(" a5="); v_print_hex(saved[9]);
+        v_print(" a6="); v_print_hex(saved[10]);
+        v_print(" a7="); v_print_hex(saved[11]);
+        v_print(" t3="); v_print_hex(saved[12]);
+        v_print(" t4="); v_print_hex(saved[13]);
+        v_print(" t5="); v_print_hex(saved[14]);
+        v_print(" t6="); v_print_hex(saved[15]);
+        v_print("\n");
+    }
 
     /* Only advance mepc for ECALLs (U-mode=8, S-mode=9, M-mode=11). */
     unsigned int cause = mcause & 0xFFF;

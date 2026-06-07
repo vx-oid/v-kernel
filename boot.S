@@ -24,7 +24,8 @@ trap_vector:
     sw t5, 56(sp)
     sw t6, 60(sp)
 
-    # 3. Call the C Handler
+    # 3. Pass pointer to saved register frame in a0 and call the C Handler
+    addi a0, sp, 0
     call c_trap_handler
 
     # 4. Restore the exact state of the CPU
