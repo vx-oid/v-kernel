@@ -59,6 +59,12 @@ _start:
     # Align 0x3FCDFFFF down to the nearest 16-byte boundary: 0x3FCDFFF0
     li sp, 0x3FCDFFF0
 
+    # Set mtvec early to trap_vector in direct mode (clear low two bits)
+    la t0, trap_vector
+    li t1, -4
+    and t0, t0, t1
+    csrw mtvec, t0
+
     # Jump to our C code
     call main
 

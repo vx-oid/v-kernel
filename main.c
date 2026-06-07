@@ -8,6 +8,11 @@
 
 extern void trap_vector();
 
+/* Forward declarations for timer/systick symbols defined later. */
+extern volatile unsigned int systicks;
+void clear_timer_interrupt(void);
+void timer_init(unsigned int dummy_frequency_divider);
+
 // --- Hardware Abstraction Layer (HAL) ---
 void v_print(const char *str) {
     while (*str) {
@@ -97,8 +102,17 @@ void c_trap_handler(unsigned int *saved) {
     }
 
     /* Only advance mepc for ECALLs (U-mode=8, S-mode=9, M-mode=11). */
-    unsigned int cause = mcause & 0xFFF;
-    if (cause == 8 || cause == 9 || cause == 11) {
+    unsigned int is_interrupt = (mcause >> 31) & 1u;
+    unsigned int cause = mcause & 0x7fffffffu;
+
+    /* Handle machine-timer interrupt (interrupt && cause==7) as a systick. */
+    if (is_interrupt && cause == 7) {
+        systicks++;
+        clear_timer_interrupt();
+        return; /* return to restore regs and mret */
+    }
+
+    if (!is_interrupt && (cause == 8 || cause == 9 || cause == 11)) {
         mepc += 4;
         asm volatile ("csrw mepc, %0" : : "r" (mepc));
         return; /* return to assembly which will restore regs and mret */
@@ -144,6 +158,24 @@ static void decode_mcause(unsigned int mcause) {
 
 int my_global_variable = 42;
 
+volatile unsigned int systicks = 0;
+
+/* Platform-specific: clear the timer interrupt source. Implement if needed. */
+void clear_timer_interrupt(void) {
+    /* Example for ESP32-C3: write to timer interrupt clear register here. */
+}
+
+/* Minimal timer init stub: user should program the timer/compare to generate
+   machine-timer interrupts. This stub enables MTIE and global MIE so the
+   machine-timer interrupt (if configured) will fire. */
+void timer_init(unsigned int dummy_frequency_divider) {
+    (void)dummy_frequency_divider;
+    /* Enable machine-timer interrupt in mie (bit 7 = MTIE) */
+    asm volatile ("csrrs zero, mie, %0" :: "r" (1u << 7));
+    /* Enable global interrupts (mstatus.MIE bit = 3) */
+    asm volatile ("csrrs zero, mstatus, %0" :: "r" (1u << 3));
+}
+
 // --- OS Entry Point ---
 void main() {
     TIMG0_WDT_PROTECT = 0x50D83AA1;
@@ -168,10 +200,18 @@ void main() {
     v_print("\n\n");
 
     // Configure the Trap Vector
-    /* Force direct mode for mtvec by clearing the low two bits. */
+    /* Attempt to set mtvec in direct mode (clear low two bits). If the
+       implementation/boot ROM forces vectored mode, accept it and continue
+       without noisy retries. */
     unsigned int mtvec_val = ((unsigned int)trap_vector) & ~0x3u;
     asm volatile ("csrw mtvec, %0" :: "r" (mtvec_val));
-    v_print("mtvec CSR configured (direct mode).\n");
+    unsigned int mtvec_readback;
+    asm volatile ("csrr %0, mtvec" : "=r" (mtvec_readback));
+    if ((mtvec_readback & 0x3u) == 0) {
+        v_print("mtvec CSR configured (direct mode).\n");
+    } else {
+        v_print("mtvec configured but in vectored mode (continuing).\n");
+    }
 
     // Trigger a manual Exception
     v_print("Pressing the RISC-V panic button (ecall)...\n");
