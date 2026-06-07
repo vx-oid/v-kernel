@@ -160,6 +160,20 @@ int my_global_variable = 42;
 
 volatile unsigned int systicks = 0;
 
+static unsigned long long read_timg0_counter(void) {
+    volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
+    volatile unsigned int *t0update = base + (0x000C / 4);
+    volatile unsigned int *t0lo_read = base + (0x0004 / 4);
+    volatile unsigned int *t0hi_read = base + (0x0008 / 4);
+
+    *t0update = 1u;
+    while ((*t0update & 1u) != 0);
+
+    unsigned long long lo = (unsigned long long)(*t0lo_read);
+    unsigned long long hi = (unsigned long long)(*t0hi_read);
+    return (hi << 32) | lo;
+}
+
 /* Platform-specific: clear the timer interrupt source. Implement if needed. */
 void clear_timer_interrupt(void) {
     /* Clear TIMG timer 0 interrupt (write-1-to-clear). */
@@ -205,6 +219,11 @@ void timer_init_periodic(unsigned int delta_ticks) {
 
     /* Disable timer while configuring */
     *t0cfg &= ~(1u << 31);
+
+    /* Use APB clock with a prescaler of 80 so the timer advances at 1 MHz. */
+    *t0cfg &= ~(((1u << 16) - 1u) << 13);
+    *t0cfg |= (80u << 13);
+    *t0cfg |= (1u << 12); /* reset divider */
 
     /* Latch current counter value */
     *t0update = 1u;
@@ -278,8 +297,23 @@ void main() {
     // If mret in boot.S works, the CPU will resume execution right here!
     v_print("\n>>> SURVIVED THE TRAP! Back in main loop. <<<\n\n");
 
+    unsigned long long last_counter = read_timg0_counter();
+    unsigned int last_systicks = systicks;
+
     while (1) {
-        v_print("System stable...\n");
-        for (volatile int i = 0; i < 2000000; i++);
+        unsigned long long current_counter = read_timg0_counter();
+
+        if ((current_counter - last_counter) >= 1000000ull || systicks != last_systicks) {
+            last_counter = current_counter;
+            last_systicks = systicks;
+
+            v_print("System stable... ticks=");
+            v_print_hex(systicks);
+            v_print(" counter=");
+            v_print_hex((unsigned int)current_counter);
+            v_print("\n");
+        }
+
+        for (volatile int i = 0; i < 200000; i++);
     }
 }
