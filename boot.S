@@ -12,7 +12,7 @@ trap_vector_table:
     j trap_vector
     j trap_vector
     j trap_vector
-    j trap_vector
+    j timer_vector
     j trap_vector
     j trap_vector
     j trap_vector
@@ -88,6 +88,28 @@ trap_vector:
 
     # 6. Machine Return (jump back to where we were before the interrupt)
     mret
+
+/* Minimal vectored timer handler for cause 7 (machine-timer).
+    This will run before the common trap handler and must clear the
+    hardware timer interrupt to avoid re-entering. */
+timer_vector:
+     # Small stack frame to preserve ra
+     addi sp, sp, -16
+     sw ra, 0(sp)
+
+     # Increment the systicks counter (systicks is a global C symbol)
+     la t0, systicks
+     lw t1, 0(t0)
+     addi t1, t1, 1
+     sw t1, 0(t0)
+
+     # Call C helper to clear the timer interrupt source
+    la t0, clear_timer_interrupt
+    jalr ra, t0, 0
+
+     lw ra, 0(sp)
+     addi sp, sp, 16
+     mret
 
 _start:
     # Set the Stack Pointer (sp) to the top of the C3's internal SRAM

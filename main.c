@@ -162,7 +162,10 @@ volatile unsigned int systicks = 0;
 
 /* Platform-specific: clear the timer interrupt source. Implement if needed. */
 void clear_timer_interrupt(void) {
-    /* Example for ESP32-C3: write to timer interrupt clear register here. */
+    /* Clear TIMG timer 0 interrupt (write-1-to-clear). */
+    volatile unsigned int *timg_int_clr = (volatile unsigned int *)(0x6001F000 + 0x007C);
+    /* Writing bit0 = 1 clears TIMG_T0_INT (WT). */
+    *timg_int_clr = 1u;
 }
 
 /* Minimal timer init stub: user should program the timer/compare to generate
@@ -170,10 +173,62 @@ void clear_timer_interrupt(void) {
    machine-timer interrupt (if configured) will fire. */
 void timer_init(unsigned int dummy_frequency_divider) {
     (void)dummy_frequency_divider;
+    /* Enable TIMG0 register clock so software can access timer registers. */
+    volatile unsigned int *timg_regclk = (volatile unsigned int *)(0x6001F000 + 0x00FC);
+    /* TIMG_TIMER_CLK_IS_ACTIVE is bit 30 in TIMG_REGCLK_REG */
+    *timg_regclk |= (1u << 30);
+
+    /* Enable Timer0 interrupt mask in TIMG_INT_ENA_TIMERS_REG (bit0) */
+    volatile unsigned int *timg_int_ena = (volatile unsigned int *)(0x6001F000 + 0x0070);
+    *timg_int_ena |= 1u;
+
     /* Enable machine-timer interrupt in mie (bit 7 = MTIE) */
     asm volatile ("csrrs zero, mie, %0" :: "r" (1u << 7));
     /* Enable global interrupts (mstatus.MIE bit = 3) */
     asm volatile ("csrrs zero, mstatus, %0" :: "r" (1u << 3));
+}
+
+/* Full TIMG0 T0 setup: latch current counter, program alarm = now+delta, enable autoreload and start. */
+void timer_init_periodic(unsigned int delta_ticks) {
+    volatile unsigned int *base = (volatile unsigned int *)0x6001F000;
+    volatile unsigned int *t0cfg = base + (0x0000/4);
+    volatile unsigned int *t0lo = base + (0x0010/4);
+    volatile unsigned int *t0hi = base + (0x0014/4);
+    volatile unsigned int *t0update = base + (0x000C/4);
+    volatile unsigned int *t0lo_read = base + (0x0004/4);
+    volatile unsigned int *t0hi_read = base + (0x0008/4);
+    volatile unsigned int *timg_regclk = base + (0x00FC/4);
+    volatile unsigned int *timg_int_ena = base + (0x0070/4);
+
+    /* Ensure TIMG0 clock is enabled */
+    *timg_regclk |= (1u << 30);
+
+    /* Disable timer while configuring */
+    *t0cfg &= ~(1u << 31);
+
+    /* Latch current counter value */
+    *t0update = 1u;
+    /* Wait until hardware clears the update bit */
+    while ((*t0update & 1u) != 0);
+
+    unsigned int lo = *t0lo_read;
+    unsigned int hi = *t0hi_read;
+    unsigned long long cur = ((unsigned long long)hi << 32) | (unsigned long long)lo;
+    unsigned long long alarm = cur + (unsigned long long)delta_ticks;
+
+    *t0lo = (unsigned int)(alarm & 0xFFFFFFFFu);
+    *t0hi = (unsigned int)(alarm >> 32);
+
+    /* Enable TIMG0 interrupt mask */
+    *timg_int_ena |= 1u;
+
+    /* Configure: set increase (bit30), autoreload (bit29), alarm_en (bit11), enable (bit31) */
+    unsigned int cfg = *t0cfg;
+    cfg |= (1u << 30); /* INCREASE */
+    cfg |= (1u << 29); /* AUTORELOAD */
+    cfg |= (1u << 11); /* ALARM_EN */
+    cfg |= (1u << 31); /* EN */
+    *t0cfg = cfg;
 }
 
 // --- OS Entry Point ---
@@ -212,6 +267,9 @@ void main() {
     } else {
         v_print("mtvec configured but in vectored mode (continuing).\n");
     }
+
+    // Start periodic TIMG0 timer (delta ticks). 1,000,000 ticks is arbitrary.
+    timer_init_periodic(1000000u);
 
     // Trigger a manual Exception
     v_print("Pressing the RISC-V panic button (ecall)...\n");
