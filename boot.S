@@ -118,6 +118,16 @@ _start:
     # Align 0x3FCDFFFF down to the nearest 16-byte boundary: 0x3FCDFFF0
     li sp, 0x3FCDFFF0
 
+    # Zero the .bss section so C globals without initializers start at 0.
+    la t0, __bss_start
+    la t1, __bss_end
+1:
+    bgeu t0, t1, 2f
+    sw zero, 0(t0)
+    addi t0, t0, 4
+    j 1b
+2:
+
     # Set mtvec early to trap_vector_table in direct mode (clear low two bits)
     la t0, trap_vector_table
     li t1, -4

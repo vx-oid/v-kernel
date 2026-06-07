@@ -17,6 +17,9 @@ SECTIONS {
     } > dram
 
     .bss : {
+        __bss_start = .;
         *(.bss*)
+        *(.sbss*)
+        __bss_end = .;
     } > dram
 }
